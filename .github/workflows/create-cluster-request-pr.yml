@@ -43,22 +43,41 @@ jobs:
           
           echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
           
+      - name: Get issue details
+        id: issue_details
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.CLUSTER_REQUEST_PAT }}
+          result-encoding: string
+          script: |
+            const issue = await github.rest.issues.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: ${{ github.event.issue.number }}
+            });
+            
+            // Return a JSON string with the issue title and body
+            return JSON.stringify({
+              title: issue.data.title,
+              body: issue.data.body || ""
+            });
+            
       - name: Create Pull Request
         id: create_pr
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.CLUSTER_REQUEST_PAT }}
           script: |
+            // Parse the issue details from the previous step
+            const issueDetails = JSON.parse('${{ steps.issue_details.outputs.result }}');
             const issueNumber = ${{ github.event.issue.number }};
-            const issueTitle = "${{ github.event.issue.title }}";
-            const issueBody = "${{ github.event.issue.body }}";
             
             // Create the pull request
             const pr = await github.rest.pulls.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `[Cluster Request] ${issueTitle}`,
-              body: issueBody + "\n\nCreated from issue #" + issueNumber,
+              title: `[Cluster Request] ${issueDetails.title}`,
+              body: `${issueDetails.body}\n\nCreated from issue #${issueNumber}`,
               head: "${{ env.BRANCH_NAME }}",
               base: "main"
             });

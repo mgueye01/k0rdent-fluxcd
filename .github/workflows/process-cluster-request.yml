@@ -37,20 +37,36 @@ jobs:
       - name: Initialize configuration
         run: task init
         
+      - name: Get PR Details
+        id: pr_details
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.CLUSTER_REQUEST_PAT }}
+          result-encoding: string
+          script: |
+            const pr = await github.rest.pulls.get({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: ${{ github.event.pull_request.number }}
+            });
+            
+            return pr.data.body || "";
+          
       - name: Extract cluster information from PR
         id: extract_cluster_info
         run: |
-          PR_BODY="${{ github.event.pull_request.body }}"
+          # Write PR body to a file to handle special characters better
+          echo '${{ steps.pr_details.outputs.result }}' > pr_body.txt
           
           # Extract required parameters from PR body
-          CLUSTER_NAME=$(echo "$PR_BODY" | grep -A 1 "**Cluster Name**:" | tail -n 1 | tr -d ' ')
-          ENVIRONMENT=$(echo "$PR_BODY" | grep -A 1 "**Environment**:" | tail -n 1 | tr -d ' ')
-          PROVIDER=$(echo "$PR_BODY" | grep -A 10 "**Provider**:" | grep -m 1 "^- " | tr -d '- ' | tr -d ' ')
-          MANAGEMENT_CLUSTER=$(echo "$PR_BODY" | grep -A 1 "**Management Cluster**:" | tail -n 1 | tr -d ' ')
-          REGION=$(echo "$PR_BODY" | grep -A 1 "**Region/Location**:" | tail -n 1 | tr -d ' ')
+          CLUSTER_NAME=$(grep -A 1 "**Cluster Name**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          ENVIRONMENT=$(grep -A 1 "**Environment**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          PROVIDER=$(grep -A 10 "**Provider**:" pr_body.txt | grep -m 1 "^- " | tr -d '- ' | tr -d ' ')
+          MANAGEMENT_CLUSTER=$(grep -A 1 "**Management Cluster**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          REGION=$(grep -A 1 "**Region/Location**:" pr_body.txt | tail -n 1 | tr -d ' ')
           
           # Resource size - need to parse from multiline
-          RESOURCE_SIZE=$(echo "$PR_BODY" | grep -A 5 "**Resource Size**:" | tail -n 5 | grep -v "<!--")
+          RESOURCE_SIZE=$(grep -A 5 "**Resource Size**:" pr_body.txt | tail -n 5 | grep -v "<!--")
           if [[ "$PROVIDER" == *"aws"* ]]; then
             CONTROL_PLANE_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "control plane" | grep -o "t[0-9]\.[a-z0-9]*\|m[0-9]\.[a-z0-9]*\|c[0-9]\.[a-z0-9]*" || echo "t3.medium")
             WORKER_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "worker" | grep -o "t[0-9]\.[a-z0-9]*\|m[0-9]\.[a-z0-9]*\|c[0-9]\.[a-z0-9]*" || echo "t3.large")
@@ -62,19 +78,30 @@ jobs:
             WORKER_INSTANCE_TYPE="large"
           fi
           
-          NODE_COUNT=$(echo "$PR_BODY" | grep -A 1 "**Node Count**:" | tail -n 1 | tr -d ' ' || echo "2")
+          NODE_COUNT=$(grep -A 1 "**Node Count**:" pr_body.txt | tail -n 1 | tr -d ' ' || echo "2")
           MIN_NODE_COUNT=$(echo "$NODE_COUNT" | awk '{print ($1 > 1) ? $1 - 1 : $1}')
           MAX_NODE_COUNT=$(echo "$NODE_COUNT" | awk '{print $1 * 2}')
           
-          TEAM=$(echo "$PR_BODY" | grep -A 1 "**Team**:" | tail -n 1 | tr -d ' ')
-          PURPOSE=$(echo "$PR_BODY" | grep -A 1 "**Purpose**:" | tail -n 1 | tr -d ' ')
-          COST_CENTER=$(echo "$PR_BODY" | grep -A 1 "**Cost Center**:" | tail -n 1 | tr -d ' ' || echo "default")
+          TEAM=$(grep -A 1 "**Team**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          PURPOSE=$(grep -A 1 "**Purpose**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          COST_CENTER=$(grep -A 1 "**Cost Center**:" pr_body.txt | tail -n 1 | tr -d ' ' || echo "default")
           
           # Validate required parameters
           if [ -z "$CLUSTER_NAME" ] || [ -z "$PROVIDER" ] || [ -z "$MANAGEMENT_CLUSTER" ]; then
             echo "Error: Missing required parameters in PR description"
             exit 1
           fi
+          
+          # Debug output
+          echo "Extracted parameters:"
+          echo "CLUSTER_NAME: $CLUSTER_NAME"
+          echo "ENVIRONMENT: $ENVIRONMENT"
+          echo "PROVIDER: $PROVIDER"
+          echo "MANAGEMENT_CLUSTER: $MANAGEMENT_CLUSTER"
+          echo "REGION: $REGION"
+          echo "CONTROL_PLANE_INSTANCE_TYPE: $CONTROL_PLANE_INSTANCE_TYPE"
+          echo "WORKER_INSTANCE_TYPE: $WORKER_INSTANCE_TYPE"
+          echo "NODE_COUNT: $NODE_COUNT"
           
           # Set outputs
           echo "CLUSTER_NAME=$CLUSTER_NAME" >> $GITHUB_ENV
