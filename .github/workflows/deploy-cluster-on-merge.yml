@@ -1,14 +1,12 @@
-name: Deploy Cluster on PR Merge
+name: Deploy Cluster on Merge
 
 on:
   pull_request:
     types: [closed]
-    branches:
-      - main
 
 jobs:
   deploy-cluster:
-    # Only run when a PR with the cluster-request label is merged
+    # Only run this job if PR was merged and it had the 'cluster-request' label
     if: |
       github.event.pull_request.merged == true &&
       contains(github.event.pull_request.labels.*.name, 'cluster-request')
@@ -18,14 +16,19 @@ jobs:
       - name: Checkout code
         uses: actions/checkout@v3
         with:
-          fetch-depth: 0
           token: ${{ secrets.CLUSTER_REQUEST_PAT }}
-          
+      
       - name: Set up Git
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
-        
+      
+      - name: Install gomplate
+        run: |
+          echo "Installing gomplate for templating..."
+          curl -o /usr/local/bin/gomplate -sSL https://github.com/hairyhenderson/gomplate/releases/download/v3.11.5/gomplate_linux-amd64
+          chmod +x /usr/local/bin/gomplate
+
       - name: Fetch PR details
         id: pr_details
         run: |
@@ -42,33 +45,80 @@ jobs:
       - name: Extract cluster information from PR
         id: extract_cluster_info
         run: |
-          # Extract required parameters from PR body
-          CLUSTER_NAME=$(grep -A 1 "**Cluster Name**:" pr_body.txt | tail -n 1 | tr -d ' ')
-          ENVIRONMENT=$(grep -A 1 "**Environment**:" pr_body.txt | tail -n 1 | tr -d ' ')
-          PROVIDER=$(grep -A 10 "**Provider**:" pr_body.txt | grep -m 1 "^- " | tr -d '- ' | tr -d ' ')
-          MANAGEMENT_CLUSTER=$(grep -A 1 "**Management Cluster**:" pr_body.txt | tail -n 1 | tr -d ' ')
-          REGION=$(grep -A 1 "**Region/Location**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          # Create a temporary json file for gomplate to use
+          echo "{}" > cluster_vars.json
           
-          # Resource size - need to parse from multiline
-          RESOURCE_SIZE=$(grep -A 5 "**Resource Size**:" pr_body.txt | tail -n 5 | grep -v "<!--")
+          # Extract cluster name and add to JSON
+          CLUSTER_NAME=$(grep -A 1 "**Cluster Name**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          jq --arg val "$CLUSTER_NAME" '. + {cluster_name: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          
+          # Extract environment and add to JSON
+          ENVIRONMENT=$(grep -A 1 "**Environment**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          jq --arg val "$ENVIRONMENT" '. + {environment: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          
+          # Extract provider and add to JSON
+          PROVIDER_LINE=$(grep -A 10 "**Provider**:" pr_body.txt | grep -m 1 "^- ")
+          PROVIDER=$(echo "$PROVIDER_LINE" | sed 's/^- //;s/^[[:space:]]*//;s/[[:space:]]*$//')
+          jq --arg val "$PROVIDER" '. + {provider: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          
+          # Extract management cluster and add to JSON
+          MANAGEMENT_CLUSTER=$(grep -A 1 "**Management Cluster**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          jq --arg val "$MANAGEMENT_CLUSTER" '. + {management_cluster: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          
+          # Extract region and add to JSON
+          REGION=$(grep -A 1 "**Region/Location**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          jq --arg val "$REGION" '. + {region: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          
+          # Extract resource sizes
+          RESOURCE_SIZE=$(grep -A 5 "**Resource Size**:" pr_body.txt | grep -v "<!--")
+          
+          # Extract control plane instance type based on provider
           if [[ "$PROVIDER" == *"aws"* ]]; then
-            CONTROL_PLANE_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "control plane" | grep -o "t[0-9]\.[a-z0-9]*\|m[0-9]\.[a-z0-9]*\|c[0-9]\.[a-z0-9]*" || echo "t3.medium")
-            WORKER_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "worker" | grep -o "t[0-9]\.[a-z0-9]*\|m[0-9]\.[a-z0-9]*\|c[0-9]\.[a-z0-9]*" || echo "t3.large")
+            CP_LINE=$(echo "$RESOURCE_SIZE" | grep -i "control plane")
+            CONTROL_PLANE_INSTANCE_TYPE=$(echo "$CP_LINE" | grep -o -E '(t|m|c)[0-9]\.[a-z0-9]+' || echo "t3.medium")
+            
+            WORKER_LINE=$(echo "$RESOURCE_SIZE" | grep -i "worker")
+            WORKER_INSTANCE_TYPE=$(echo "$WORKER_LINE" | grep -o -E '(t|m|c)[0-9]\.[a-z0-9]+' || echo "t3.large")
           elif [[ "$PROVIDER" == *"azure"* ]]; then
-            CONTROL_PLANE_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "control plane" | grep -o "Standard_[A-Za-z][0-9]\S*" || echo "Standard_D2s_v3")
-            WORKER_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "worker" | grep -o "Standard_[A-Za-z][0-9]\S*" || echo "Standard_D4s_v3")
+            CP_LINE=$(echo "$RESOURCE_SIZE" | grep -i "control plane")
+            CONTROL_PLANE_INSTANCE_TYPE=$(echo "$CP_LINE" | grep -o -E 'Standard_[A-Za-z][0-9][A-Za-z0-9_]+' || echo "Standard_D2s_v3")
+            
+            WORKER_LINE=$(echo "$RESOURCE_SIZE" | grep -i "worker")
+            WORKER_INSTANCE_TYPE=$(echo "$WORKER_LINE" | grep -o -E 'Standard_[A-Za-z][0-9][A-Za-z0-9_]+' || echo "Standard_D4s_v3")
           else
             CONTROL_PLANE_INSTANCE_TYPE="medium"
             WORKER_INSTANCE_TYPE="large"
           fi
           
-          NODE_COUNT=$(grep -A 1 "**Node Count**:" pr_body.txt | tail -n 1 | tr -d ' ' || echo "2")
+          # Add instance types to JSON
+          jq --arg val "$CONTROL_PLANE_INSTANCE_TYPE" '. + {control_plane_instance_type: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          jq --arg val "$WORKER_INSTANCE_TYPE" '. + {worker_instance_type: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          
+          # Extract node count and add to JSON
+          NODE_COUNT=$(grep -A 1 "**Node Count**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "2")
+          jq --arg val "$NODE_COUNT" '. + {node_count: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          
+          # Calculate min and max node counts
           MIN_NODE_COUNT=$(echo "$NODE_COUNT" | awk '{print ($1 > 1) ? $1 - 1 : $1}')
           MAX_NODE_COUNT=$(echo "$NODE_COUNT" | awk '{print $1 * 2}')
+          jq --arg val "$MIN_NODE_COUNT" '. + {min_node_count: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          jq --arg val "$MAX_NODE_COUNT" '. + {max_node_count: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
           
-          TEAM=$(grep -A 1 "**Team**:" pr_body.txt | tail -n 1 | tr -d ' ')
-          PURPOSE=$(grep -A 1 "**Purpose**:" pr_body.txt | tail -n 1 | tr -d ' ')
-          COST_CENTER=$(grep -A 1 "**Cost Center**:" pr_body.txt | tail -n 1 | tr -d ' ' || echo "default")
+          # Extract team and add to JSON
+          TEAM=$(grep -A 1 "**Team**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          jq --arg val "$TEAM" '. + {team: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          
+          # Extract purpose and add to JSON
+          PURPOSE=$(grep -A 1 "**Purpose**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+          jq --arg val "$PURPOSE" '. + {purpose: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          
+          # Extract cost center and add to JSON
+          COST_CENTER=$(grep -A 1 "**Cost Center**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "default")
+          jq --arg val "$COST_CENTER" '. + {cost_center: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          
+          # Add timestamp to JSON
+          TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          jq --arg val "$TIMESTAMP" '. + {created_at: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
           
           # Validate required parameters
           if [ -z "$CLUSTER_NAME" ] || [ -z "$PROVIDER" ] || [ -z "$MANAGEMENT_CLUSTER" ]; then
@@ -76,60 +126,63 @@ jobs:
             exit 1
           fi
           
-          # Set outputs
-          echo "CLUSTER_NAME=$CLUSTER_NAME" >> $GITHUB_ENV
-          echo "ENVIRONMENT=$ENVIRONMENT" >> $GITHUB_ENV
-          echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
-          echo "MANAGEMENT_CLUSTER=$MANAGEMENT_CLUSTER" >> $GITHUB_ENV
-          echo "REGION=$REGION" >> $GITHUB_ENV
-          echo "CONTROL_PLANE_INSTANCE_TYPE=$CONTROL_PLANE_INSTANCE_TYPE" >> $GITHUB_ENV
-          echo "WORKER_INSTANCE_TYPE=$WORKER_INSTANCE_TYPE" >> $GITHUB_ENV
-          echo "NODE_COUNT=$NODE_COUNT" >> $GITHUB_ENV
-          echo "MIN_NODE_COUNT=$MIN_NODE_COUNT" >> $GITHUB_ENV
-          echo "MAX_NODE_COUNT=$MAX_NODE_COUNT" >> $GITHUB_ENV
-          echo "TEAM=$TEAM" >> $GITHUB_ENV
-          echo "PURPOSE=$PURPOSE" >> $GITHUB_ENV
-          echo "COST_CENTER=$COST_CENTER" >> $GITHUB_ENV
+          # Export variables to environment for use in other steps
+          jq -r 'to_entries | .[] | "echo \"\(.key)=\(.value)\" >> $GITHUB_ENV"' cluster_vars.json > export_vars.sh
+          chmod +x export_vars.sh
+          ./export_vars.sh
           
           # Debug output
-          echo "Deploying cluster:"
-          echo "CLUSTER_NAME: $CLUSTER_NAME"
-          echo "ENVIRONMENT: $ENVIRONMENT"
-          echo "PROVIDER: $PROVIDER"
-          echo "MANAGEMENT_CLUSTER: $MANAGEMENT_CLUSTER"
-          echo "REGION: $REGION"
-          echo "CONTROL_PLANE_INSTANCE_TYPE: $CONTROL_PLANE_INSTANCE_TYPE"
-          echo "WORKER_INSTANCE_TYPE: $WORKER_INSTANCE_TYPE"
-          echo "NODE_COUNT: $NODE_COUNT"
+          echo "Extracted parameters:"
+          cat cluster_vars.json
       
       - name: Generate k0rdent Cluster Deployment manifest
         run: |
-          # Create the final directory structure for k0rdent
-          TARGET_DIR="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}"
+          # Set target directory for the cluster
+          TARGET_DIR="management-clusters/${{ env.management_cluster }}/k0rdent/cluster-deployments/${{ env.cluster_name }}"
           mkdir -p "$TARGET_DIR"
           
-          # Copy and fill the template
-          TEMPLATE_FILE=".github/templates/cluster-deployments/${{ env.PROVIDER }}/template.yaml"
+          # Copy the template file for the provider
+          TEMPLATE_FILE=".github/templates/cluster-deployments/${{ env.provider }}/template.yaml"
           if [ ! -f "$TEMPLATE_FILE" ]; then
-            echo "Error: Template for provider ${{ env.PROVIDER }} not found"
+            echo "Error: Template for provider ${{ env.provider }} not found"
             exit 1
           fi
           
-          # Use envsubst to replace variables in the template
-          cat "$TEMPLATE_FILE" | \
-          envsubst '$CLUSTER_NAME $ENVIRONMENT $REGION $CONTROL_PLANE_INSTANCE_TYPE $WORKER_INSTANCE_TYPE $NODE_COUNT $MIN_NODE_COUNT $MAX_NODE_COUNT $TEAM $PURPOSE $COST_CENTER' \
-          > "$TARGET_DIR/cluster-deployment.yaml"
+          # Use gomplate to generate the deployment file from the template
+          gomplate -f "$TEMPLATE_FILE" -d cluster=cluster_vars.json -o "$TARGET_DIR/cluster-deployment.yaml"
           
-          # Create kustomization.yaml for the cluster
+          # Create kustomization.yaml
           cat > "$TARGET_DIR/kustomization.yaml" << EOF
           apiVersion: kustomize.config.k8s.io/v1beta1
           kind: Kustomization
           resources:
           - cluster-deployment.yaml
+          - k0rdent-metadata.yaml
+          EOF
+          
+          # Create metadata file
+          cat > "$TARGET_DIR/k0rdent-metadata.yaml" << EOF
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: ${{ env.cluster_name }}-metadata
+            namespace: k0rdent-system
+          data:
+            cluster_name: "${{ env.cluster_name }}"
+            provider: "${{ env.provider }}"
+            environment: "${{ env.environment }}"
+            region: "${{ env.region }}"
+            management_cluster: "${{ env.management_cluster }}"
+            team: "${{ env.team }}"
+            purpose: "${{ env.purpose }}"
+            cost_center: "${{ env.cost_center }}"
+            created_at: "${{ env.created_at }}"
+            created_by: "github-actions"
+            pr_number: "${{ env.PR_NUMBER }}"
           EOF
           
           # Update main kustomization.yaml for cluster-deployments
-          MAIN_KUSTOMIZATION="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/kustomization.yaml"
+          MAIN_KUSTOMIZATION="management-clusters/${{ env.management_cluster }}/k0rdent/cluster-deployments/kustomization.yaml"
           
           # Create the main kustomization.yaml if it doesn't exist
           if [ ! -f "$MAIN_KUSTOMIZATION" ]; then
@@ -141,115 +194,41 @@ jobs:
           EOF
           fi
           
-          # Update the main kustomization.yaml to include the new cluster
-          if grep -q "${{ env.CLUSTER_NAME }}" "$MAIN_KUSTOMIZATION"; then
+          # Update the kustomization.yaml to include the new cluster
+          if grep -q "${{ env.cluster_name }}" "$MAIN_KUSTOMIZATION"; then
             echo "Cluster already exists in kustomization.yaml, skipping update"
           else
             # Check if resources: [] is in the file and replace it
             if grep -q "resources: \[\]" "$MAIN_KUSTOMIZATION"; then
-              sed -i "s|resources: \[\]|resources:\n- ${{ env.CLUSTER_NAME }}|g" "$MAIN_KUSTOMIZATION"
+              sed -i "s|resources: \[\]|resources:\n- ${{ env.cluster_name }}|g" "$MAIN_KUSTOMIZATION"
             else
               # Append to existing resources list
-              sed -i "/resources:/a \ - ${{ env.CLUSTER_NAME }}" "$MAIN_KUSTOMIZATION"
+              sed -i "/resources:/a \ - ${{ env.cluster_name }}" "$MAIN_KUSTOMIZATION"
             fi
           fi
-          
-          # Add a file containing deployment metadata for tracking
-          cat > "$TARGET_DIR/k0rdent-metadata.yaml" << EOF
-          apiVersion: v1
-          kind: ConfigMap
-          metadata:
-            name: ${{ env.CLUSTER_NAME }}-metadata
-            namespace: k0rdent-system
-          data:
-            cluster_name: "${{ env.CLUSTER_NAME }}"
-            provider: "${{ env.PROVIDER }}"
-            environment: "${{ env.ENVIRONMENT }}"
-            region: "${{ env.REGION }}"
-            management_cluster: "${{ env.MANAGEMENT_CLUSTER }}"
-            team: "${{ env.TEAM }}"
-            purpose: "${{ env.PURPOSE }}"
-            cost_center: "${{ env.COST_CENTER }}"
-            created_at: "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
-            created_by: "github-actions"
-            pr_number: "${{ env.PR_NUMBER }}"
-          EOF
-          
-          # Update the cluster kustomization to include the metadata
-          sed -i "/- cluster-deployment.yaml/a \ - k0rdent-metadata.yaml" "$TARGET_DIR/kustomization.yaml"
-          
-          # Check if we created the files correctly
-          echo "Verifying k0rdent cluster deployment files:"
-          ls -la "$TARGET_DIR"
-          
-      - name: Verify ArgoCD/FluxCD structure
+
+      - name: Commit cluster deployment to main
         run: |
-          # Verify that the structure follows k0rdent expectations
-          # These checks are to ensure that ArgoCD can reconcile the resources
-          
-          echo "Verifying ArgoCD/FluxCD structure for k0rdent..."
-          
-          # Check main kustomization
-          MAIN_KUSTOMIZATION="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/kustomization.yaml"
-          if [ ! -f "$MAIN_KUSTOMIZATION" ]; then
-            echo "Error: Main kustomization.yaml not found at $MAIN_KUSTOMIZATION"
-            exit 1
-          fi
-          
-          # Check cluster directory
-          CLUSTER_DIR="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}"
-          if [ ! -d "$CLUSTER_DIR" ]; then
-            echo "Error: Cluster directory not found at $CLUSTER_DIR"
-            exit 1
-          fi
-          
-          # Check cluster deployment file
-          if [ ! -f "$CLUSTER_DIR/cluster-deployment.yaml" ]; then
-            echo "Error: cluster-deployment.yaml not found in $CLUSTER_DIR"
-            exit 1
-          fi
-          
-          # Check cluster kustomization
-          if [ ! -f "$CLUSTER_DIR/kustomization.yaml" ]; then
-            echo "Error: kustomization.yaml not found in $CLUSTER_DIR"
-            exit 1
-          fi
-          
-          # Check metadata file
-          if [ ! -f "$CLUSTER_DIR/k0rdent-metadata.yaml" ]; then
-            echo "Error: k0rdent-metadata.yaml not found in $CLUSTER_DIR"
-            exit 1
-          fi
-          
-          echo "Directory structure verification successful"
-          
-      - name: Commit and push final deployment
-        run: |
-          git add management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}
-          git add management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/kustomization.yaml
-          git commit -m "Deploy ClusterDeployment for ${{ env.CLUSTER_NAME }} on ${{ env.PROVIDER }}"
+          git add "management-clusters/${{ env.management_cluster }}/k0rdent/cluster-deployments/${{ env.cluster_name }}"
+          git add "management-clusters/${{ env.management_cluster }}/k0rdent/cluster-deployments/kustomization.yaml"
+          git commit -m "Deploy cluster ${{ env.cluster_name }} on ${{ env.provider }}"
           git remote set-url origin https://x-access-token:${{ secrets.CLUSTER_REQUEST_PAT }}@github.com/${{ github.repository }}.git
-          git push origin main
-          
-      - name: Add deployment notification comment
+          git push
+
+      - name: Post deployment comment
         run: |
-          # Add a comment to the PR with deployment information
-          gh pr comment ${{ env.PR_NUMBER }} --body "
+          gh pr comment ${{ github.event.pull_request.number }} --body "
           ## :rocket: Cluster Deployment Initiated
           
-          The cluster deployment for **${{ env.CLUSTER_NAME }}** has been submitted to the ${{ env.MANAGEMENT_CLUSTER }} management cluster.
+          The cluster deployment for **${{ env.cluster_name }}** has been initiated.
           
-          ### Deployment Details:
-          - **Cluster Name**: ${{ env.CLUSTER_NAME }}
-          - **Provider**: ${{ env.PROVIDER }}
-          - **Environment**: ${{ env.ENVIRONMENT }}
-          - **Region**: ${{ env.REGION }}
-          - **Management Cluster**: ${{ env.MANAGEMENT_CLUSTER }}
+          **Details:**
+          - Management Cluster: \`${{ env.management_cluster }}\`
+          - Provider: \`${{ env.provider }}\`
+          - Environment: \`${{ env.environment }}\`
+          - Region: \`${{ env.region }}\`
           
-          The k0rdent Cluster Manager (KCM) will now process this request and create the Kubernetes cluster.
-          You can monitor the progress in ArgoCD or through the k0rdent dashboard.
-          
-          Deployment path: \`management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}\`
+          ArgoCD will now pick up the changes and k0rdent will begin the cluster creation process.
           "
         env:
           GH_TOKEN: ${{ secrets.CLUSTER_REQUEST_PAT }} 

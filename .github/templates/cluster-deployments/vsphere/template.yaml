@@ -2,29 +2,29 @@
 apiVersion: cluster.k0rdent.io/v1alpha1
 kind: ClusterDeployment
 metadata:
-  name: ${CLUSTER_NAME}
+  name: {{ (ds "cluster").cluster_name }}
   labels:
-    environment: ${ENVIRONMENT}
-    team: ${TEAM}
-    purpose: ${PURPOSE}
-    cost-center: ${COST_CENTER}
+    environment: {{ (ds "cluster").environment }}
+    team: {{ (ds "cluster").team }}
+    purpose: {{ (ds "cluster").purpose }}
+    cost-center: {{ (ds "cluster").cost_center }}
     k0rdent.io/managed: "true"
 spec:
-  clusterName: ${CLUSTER_NAME}
+  clusterName: {{ (ds "cluster").cluster_name }}
   provider: vsphere
-  datacenter: "${REGION}"
+  datacenter: "{{ (ds "cluster").region }}"
   version: "1.26"
   controlPlane:
-    instanceType: ${CONTROL_PLANE_INSTANCE_TYPE}
+    instanceType: {{ (ds "cluster").control_plane_instance_type }}
     count: 1
     diskGiB: 100
     memoryMiB: 8192
     numCPUs: 4
   workers:
-    instanceType: ${WORKER_INSTANCE_TYPE}
-    count: ${NODE_COUNT}
-    minCount: ${MIN_NODE_COUNT}
-    maxCount: ${MAX_NODE_COUNT}
+    instanceType: {{ (ds "cluster").worker_instance_type }}
+    count: {{ (ds "cluster").node_count }}
+    minCount: {{ (ds "cluster").min_node_count }}
+    maxCount: {{ (ds "cluster").max_node_count }}
     diskGiB: 100
     memoryMiB: 16384
     numCPUs: 8
@@ -36,10 +36,10 @@ spec:
     certManager: true
     monitoring: true
     logging: true
-  folder: "k0rdent-${CLUSTER_NAME}"
+  folder: "k0rdent-{{ (ds "cluster").cluster_name }}"
   tags:
-    environment: ${ENVIRONMENT}
-    team: ${TEAM}
-    purpose: ${PURPOSE}
-    cost-center: ${COST_CENTER}
+    environment: {{ (ds "cluster").environment }}
+    team: {{ (ds "cluster").team }}
+    purpose: {{ (ds "cluster").purpose }}
+    cost-center: {{ (ds "cluster").cost_center }}
     created-by: "k0rdent-fluxcd" 

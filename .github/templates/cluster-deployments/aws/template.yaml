@@ -2,27 +2,27 @@
 apiVersion: cluster.k0rdent.io/v1alpha1
 kind: ClusterDeployment
 metadata:
-  name: ${CLUSTER_NAME}
+  name: {{ (ds "cluster").cluster_name }}
   labels:
-    environment: ${ENVIRONMENT}
-    team: ${TEAM}
-    purpose: ${PURPOSE}
-    cost-center: ${COST_CENTER}
+    environment: {{ (ds "cluster").environment }}
+    team: {{ (ds "cluster").team }}
+    purpose: {{ (ds "cluster").purpose }}
+    cost-center: {{ (ds "cluster").cost_center }}
     k0rdent.io/managed: "true"
 spec:
-  clusterName: ${CLUSTER_NAME}
+  clusterName: {{ (ds "cluster").cluster_name }}
   provider: aws
-  region: ${REGION}
+  region: {{ (ds "cluster").region }}
   version: "1.26"
   controlPlane:
-    instanceType: ${CONTROL_PLANE_INSTANCE_TYPE}
+    instanceType: {{ (ds "cluster").control_plane_instance_type }}
     count: 1
     spotInstances: false
   workers:
-    instanceType: ${WORKER_INSTANCE_TYPE}
-    count: ${NODE_COUNT}
-    minCount: ${MIN_NODE_COUNT}
-    maxCount: ${MAX_NODE_COUNT}
+    instanceType: {{ (ds "cluster").worker_instance_type }}
+    count: {{ (ds "cluster").node_count }}
+    minCount: {{ (ds "cluster").min_node_count }}
+    maxCount: {{ (ds "cluster").max_node_count }}
     spotInstances: false
   networking:
     podCIDR: "192.168.0.0/16"
@@ -33,8 +33,8 @@ spec:
     monitoring: true
     logging: true
   tags:
-    environment: ${ENVIRONMENT}
-    team: ${TEAM}
-    purpose: ${PURPOSE}
-    cost-center: ${COST_CENTER}
+    environment: {{ (ds "cluster").environment }}
+    team: {{ (ds "cluster").team }}
+    purpose: {{ (ds "cluster").purpose }}
+    cost-center: {{ (ds "cluster").cost_center }}
     created-by: "k0rdent-fluxcd" 
