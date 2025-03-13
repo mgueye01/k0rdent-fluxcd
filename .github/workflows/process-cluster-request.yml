@@ -49,109 +49,213 @@ jobs:
       - name: Extract cluster information from PR
         id: extract_cluster_info
         run: |
+          # Debug PR body content
+          echo "PR Body Content (first 10 lines):"
+          head -10 pr_body.txt || echo "Could not read pr_body.txt"
+          
+          # Check if jq is installed
+          if ! command -v jq &> /dev/null; then
+            echo "Error: jq is not installed. Installing now..."
+            apt-get update && apt-get install -y jq
+          fi
+          
           # Create a temporary json file for gomplate to use
           echo "{}" > cluster_vars.json
           
-          # Extract cluster name and add to JSON
-          CLUSTER_NAME=$(grep -A 1 "**Cluster Name**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          jq --arg val "$CLUSTER_NAME" '. + {cluster_name: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          # Function to safely extract and add a field to the JSON
+          extract_field() {
+            local field_name=$1
+            local grep_pattern=$2
+            local default_value=$3
+            
+            echo "Extracting $field_name with pattern: $grep_pattern"
+            local value
+            
+            # Use grep to extract the value and handle errors
+            if value=$(grep -A 1 "$grep_pattern" pr_body.txt 2>/dev/null | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "$default_value"); then
+              echo "  Found value: $value"
+              # Only update JSON if value is not empty or we have a default
+              if [ -n "$value" ] || [ -n "$default_value" ]; then
+                # Add to JSON safely
+                if ! jq --arg key "$field_name" --arg val "$value" '. + {($key): $val}' cluster_vars.json > tmp.json; then
+                  echo "Error: Failed to update JSON with $field_name"
+                  return 1
+                fi
+                mv tmp.json cluster_vars.json
+              else
+                echo "  Warning: Empty value for $field_name and no default provided"
+              fi
+            else
+              echo "  Warning: Could not extract $field_name"
+              if [ -n "$default_value" ]; then
+                echo "  Using default value: $default_value"
+                jq --arg key "$field_name" --arg val "$default_value" '. + {($key): $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+              fi
+            fi
+          }
           
-          # Extract environment and add to JSON
-          ENVIRONMENT=$(grep -A 1 "**Environment**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          jq --arg val "$ENVIRONMENT" '. + {environment: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          # Extract cluster name
+          extract_field "cluster_name" "**Cluster Name**:" ""
           
-          # Extract provider and add to JSON
-          PROVIDER_LINE=$(grep -A 10 "**Provider**:" pr_body.txt | grep -m 1 "^- ")
+          # Extract environment
+          extract_field "environment" "**Environment**:" "development"
+          
+          # Extract management cluster
+          extract_field "management_cluster" "**Management Cluster**:" ""
+          
+          # Extract region
+          extract_field "region" "**Region/Location**:" ""
+          
+          # Special handling for provider which has a different format
+          echo "Extracting provider"
+          PROVIDER_LINE=$(grep -A 10 "**Provider**:" pr_body.txt 2>/dev/null | grep -m 1 "^- " || echo "- aws")
           PROVIDER=$(echo "$PROVIDER_LINE" | sed 's/^- //;s/^[[:space:]]*//;s/[[:space:]]*$//')
+          echo "  Found provider: $PROVIDER"
           jq --arg val "$PROVIDER" '. + {provider: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
           
-          # Extract management cluster and add to JSON
-          MANAGEMENT_CLUSTER=$(grep -A 1 "**Management Cluster**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          jq --arg val "$MANAGEMENT_CLUSTER" '. + {management_cluster: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          # Extract resource sizes - handle specially
+          echo "Extracting resource sizes"
+          RESOURCE_SIZE=$(grep -A 5 "**Resource Size**:" pr_body.txt 2>/dev/null | grep -v "<!--" || echo "")
           
-          # Extract region and add to JSON
-          REGION=$(grep -A 1 "**Region/Location**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          jq --arg val "$REGION" '. + {region: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          # Set default instance types
+          CONTROL_PLANE_INSTANCE_TYPE="t3.medium"
+          WORKER_INSTANCE_TYPE="t3.large"
           
-          # Extract resource sizes
-          RESOURCE_SIZE=$(grep -A 5 "**Resource Size**:" pr_body.txt | grep -v "<!--")
-          
-          # Extract control plane instance type based on provider
+          # Extract instance types based on provider
           if [[ "$PROVIDER" == *"aws"* ]]; then
-            CP_LINE=$(echo "$RESOURCE_SIZE" | grep -i "control plane")
-            CONTROL_PLANE_INSTANCE_TYPE=$(echo "$CP_LINE" | grep -o -E '(t|m|c)[0-9]\.[a-z0-9]+' || echo "t3.medium")
+            CP_LINE=$(echo "$RESOURCE_SIZE" | grep -i "control plane" || echo "")
+            if [[ -n "$CP_LINE" ]]; then
+              CP_TYPE=$(echo "$CP_LINE" | grep -o -E '(t|m|c)[0-9]\.[a-z0-9]+' || echo "")
+              if [[ -n "$CP_TYPE" ]]; then
+                CONTROL_PLANE_INSTANCE_TYPE=$CP_TYPE
+              fi
+            fi
             
-            WORKER_LINE=$(echo "$RESOURCE_SIZE" | grep -i "worker")
-            WORKER_INSTANCE_TYPE=$(echo "$WORKER_LINE" | grep -o -E '(t|m|c)[0-9]\.[a-z0-9]+' || echo "t3.large")
+            WORKER_LINE=$(echo "$RESOURCE_SIZE" | grep -i "worker" || echo "")
+            if [[ -n "$WORKER_LINE" ]]; then
+              WORKER_TYPE=$(echo "$WORKER_LINE" | grep -o -E '(t|m|c)[0-9]\.[a-z0-9]+' || echo "")
+              if [[ -n "$WORKER_TYPE" ]]; then
+                WORKER_INSTANCE_TYPE=$WORKER_TYPE
+              fi
+            fi
           elif [[ "$PROVIDER" == *"azure"* ]]; then
-            CP_LINE=$(echo "$RESOURCE_SIZE" | grep -i "control plane")
-            CONTROL_PLANE_INSTANCE_TYPE=$(echo "$CP_LINE" | grep -o -E 'Standard_[A-Za-z][0-9][A-Za-z0-9_]+' || echo "Standard_D2s_v3")
+            CP_LINE=$(echo "$RESOURCE_SIZE" | grep -i "control plane" || echo "")
+            if [[ -n "$CP_LINE" ]]; then
+              CP_TYPE=$(echo "$CP_LINE" | grep -o -E 'Standard_[A-Za-z][0-9][A-Za-z0-9_]+' || echo "")
+              if [[ -n "$CP_TYPE" ]]; then
+                CONTROL_PLANE_INSTANCE_TYPE=$CP_TYPE
+              else
+                CONTROL_PLANE_INSTANCE_TYPE="Standard_D2s_v3"
+              fi
+            else
+              CONTROL_PLANE_INSTANCE_TYPE="Standard_D2s_v3"
+            fi
             
-            WORKER_LINE=$(echo "$RESOURCE_SIZE" | grep -i "worker")
-            WORKER_INSTANCE_TYPE=$(echo "$WORKER_LINE" | grep -o -E 'Standard_[A-Za-z][0-9][A-Za-z0-9_]+' || echo "Standard_D4s_v3")
+            WORKER_LINE=$(echo "$RESOURCE_SIZE" | grep -i "worker" || echo "")
+            if [[ -n "$WORKER_LINE" ]]; then
+              WORKER_TYPE=$(echo "$WORKER_LINE" | grep -o -E 'Standard_[A-Za-z][0-9][A-Za-z0-9_]+' || echo "")
+              if [[ -n "$WORKER_TYPE" ]]; then
+                WORKER_INSTANCE_TYPE=$WORKER_TYPE
+              else
+                WORKER_INSTANCE_TYPE="Standard_D4s_v3"
+              fi
+            else
+              WORKER_INSTANCE_TYPE="Standard_D4s_v3"
+            fi
           else
             CONTROL_PLANE_INSTANCE_TYPE="medium"
             WORKER_INSTANCE_TYPE="large"
           fi
           
+          echo "  Control Plane Instance Type: $CONTROL_PLANE_INSTANCE_TYPE"
+          echo "  Worker Instance Type: $WORKER_INSTANCE_TYPE"
+          
           # Add instance types to JSON
           jq --arg val "$CONTROL_PLANE_INSTANCE_TYPE" '. + {control_plane_instance_type: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
           jq --arg val "$WORKER_INSTANCE_TYPE" '. + {worker_instance_type: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
           
-          # Extract node count and add to JSON
-          NODE_COUNT=$(grep -A 1 "**Node Count**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "2")
+          # Extract node count with default
+          echo "Extracting node count"
+          NODE_COUNT=$(grep -A 1 "**Node Count**:" pr_body.txt 2>/dev/null | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "2")
+          echo "  Node Count: $NODE_COUNT"
           jq --arg val "$NODE_COUNT" '. + {node_count: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
           
           # Calculate min and max node counts
           MIN_NODE_COUNT=$(echo "$NODE_COUNT" | awk '{print ($1 > 1) ? $1 - 1 : $1}')
           MAX_NODE_COUNT=$(echo "$NODE_COUNT" | awk '{print $1 * 2}')
+          echo "  Min Node Count: $MIN_NODE_COUNT"
+          echo "  Max Node Count: $MAX_NODE_COUNT"
           jq --arg val "$MIN_NODE_COUNT" '. + {min_node_count: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
           jq --arg val "$MAX_NODE_COUNT" '. + {max_node_count: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
           
-          # Extract team and add to JSON
-          TEAM=$(grep -A 1 "**Team**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          jq --arg val "$TEAM" '. + {team: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          # Extract team
+          extract_field "team" "**Team**:" "default"
           
-          # Extract purpose and add to JSON
-          PURPOSE=$(grep -A 1 "**Purpose**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-          jq --arg val "$PURPOSE" '. + {purpose: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          # Extract purpose
+          extract_field "purpose" "**Purpose**:" "general"
           
-          # Extract cost center and add to JSON
-          COST_CENTER=$(grep -A 1 "**Cost Center**:" pr_body.txt | tail -n 1 | sed 's/^[[:space:]]*//;s/[[:space:]]*$//' || echo "default")
-          jq --arg val "$COST_CENTER" '. + {cost_center: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
+          # Extract cost center
+          extract_field "cost_center" "**Cost Center**:" "default"
           
           # Add timestamp to JSON
           TIMESTAMP=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          echo "Timestamp: $TIMESTAMP"
           jq --arg val "$TIMESTAMP" '. + {created_at: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
           jq --arg val "${{ github.event.pull_request.number }}" '. + {pr_number: $val}' cluster_vars.json > tmp.json && mv tmp.json cluster_vars.json
           
+          # Validate and ensure json is valid
+          if ! jq '.' cluster_vars.json > /dev/null 2>&1; then
+            echo "Error: Invalid JSON in cluster_vars.json"
+            echo "Content of cluster_vars.json:"
+            cat cluster_vars.json
+            exit 1
+          fi
+          
           # Validate required parameters
-          if [ -z "$CLUSTER_NAME" ] || [ -z "$PROVIDER" ] || [ -z "$MANAGEMENT_CLUSTER" ]; then
+          if [ -z "$(jq -r '.cluster_name' cluster_vars.json)" ] || [ -z "$(jq -r '.provider' cluster_vars.json)" ] || [ -z "$(jq -r '.management_cluster' cluster_vars.json)" ]; then
             echo "Error: Missing required parameters in PR description"
+            echo "Content of cluster_vars.json:"
+            cat cluster_vars.json
             exit 1
           fi
           
           # Export variables to environment for use in other steps
           # More reliable method to export variables to GITHUB_ENV
-          echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_ENV
-          echo "environment=$ENVIRONMENT" >> $GITHUB_ENV
-          echo "provider=$PROVIDER" >> $GITHUB_ENV
-          echo "management_cluster=$MANAGEMENT_CLUSTER" >> $GITHUB_ENV
-          echo "region=$REGION" >> $GITHUB_ENV
-          echo "control_plane_instance_type=$CONTROL_PLANE_INSTANCE_TYPE" >> $GITHUB_ENV
-          echo "worker_instance_type=$WORKER_INSTANCE_TYPE" >> $GITHUB_ENV
-          echo "node_count=$NODE_COUNT" >> $GITHUB_ENV
-          echo "min_node_count=$MIN_NODE_COUNT" >> $GITHUB_ENV
-          echo "max_node_count=$MAX_NODE_COUNT" >> $GITHUB_ENV
-          echo "team=$TEAM" >> $GITHUB_ENV
-          echo "purpose=$PURPOSE" >> $GITHUB_ENV
-          echo "cost_center=$COST_CENTER" >> $GITHUB_ENV
-          echo "created_at=$TIMESTAMP" >> $GITHUB_ENV
+          cluster_name=$(jq -r '.cluster_name' cluster_vars.json)
+          environment=$(jq -r '.environment' cluster_vars.json)
+          provider=$(jq -r '.provider' cluster_vars.json)
+          management_cluster=$(jq -r '.management_cluster' cluster_vars.json)
+          region=$(jq -r '.region' cluster_vars.json)
+          control_plane_instance_type=$(jq -r '.control_plane_instance_type' cluster_vars.json)
+          worker_instance_type=$(jq -r '.worker_instance_type' cluster_vars.json)
+          node_count=$(jq -r '.node_count' cluster_vars.json)
+          min_node_count=$(jq -r '.min_node_count' cluster_vars.json)
+          max_node_count=$(jq -r '.max_node_count' cluster_vars.json)
+          team=$(jq -r '.team' cluster_vars.json)
+          purpose=$(jq -r '.purpose' cluster_vars.json)
+          cost_center=$(jq -r '.cost_center' cluster_vars.json)
+          created_at=$(jq -r '.created_at' cluster_vars.json)
+          
+          echo "cluster_name=$cluster_name" >> $GITHUB_ENV
+          echo "environment=$environment" >> $GITHUB_ENV
+          echo "provider=$provider" >> $GITHUB_ENV
+          echo "management_cluster=$management_cluster" >> $GITHUB_ENV
+          echo "region=$region" >> $GITHUB_ENV
+          echo "control_plane_instance_type=$control_plane_instance_type" >> $GITHUB_ENV
+          echo "worker_instance_type=$worker_instance_type" >> $GITHUB_ENV
+          echo "node_count=$node_count" >> $GITHUB_ENV
+          echo "min_node_count=$min_node_count" >> $GITHUB_ENV
+          echo "max_node_count=$max_node_count" >> $GITHUB_ENV
+          echo "team=$team" >> $GITHUB_ENV
+          echo "purpose=$purpose" >> $GITHUB_ENV
+          echo "cost_center=$cost_center" >> $GITHUB_ENV
+          echo "created_at=$created_at" >> $GITHUB_ENV
           echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
           
           # Debug output
-          echo "Extracted parameters:"
-          cat cluster_vars.json
+          echo "========== Extracted parameters: ==========="
+          jq '.' cluster_vars.json
+          echo "==========================================="
       
       - name: Generate Cluster Deployment file
         run: |
