@@ -1,0 +1,30 @@
+---
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: kcm
+  namespace: kcm-system
+spec:
+  project: default
+  source:
+    repoURL: oci://ghcr.io/k0rdent/kcm/charts
+    targetRevision: 0.1.0
+    chart: kcm
+    helm:
+      values: |
+        cert-manager:
+          enabled: true
+        controller:
+          createAccessManagement: true
+          createManagement: true
+        flux2:
+          enabled: true
+
+  destination:
+    name: "in-cluster"
+    namespace: kcm-system
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+
