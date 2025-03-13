@@ -30,3 +30,4 @@ go.work.sum
 .task
 /config.yaml
 /bin
+.qodo
