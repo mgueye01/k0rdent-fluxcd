@@ -7,7 +7,7 @@ metadata:
 spec:
   project: default
   source:
-    repoURL: oci://ghcr.io/k0rdent/kcm/charts
+    repoURL: ghcr.io/k0rdent/kcm/charts
     targetRevision: 0.1.0
     chart: kcm
     helm:
