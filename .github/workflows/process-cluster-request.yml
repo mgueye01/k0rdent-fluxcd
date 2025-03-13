@@ -7,6 +7,9 @@ on:
 
 jobs:
   process-cluster-request:
+    # This workflow prepares the cluster configuration files
+    # The actual cluster deployment happens after the PR is merged
+    # See deploy-cluster-on-merge.yml for the deployment workflow
     if: |
       github.event.review.state == 'approved' &&
       contains(github.event.pull_request.labels.*.name, 'cluster-request')
@@ -158,4 +161,22 @@ jobs:
           git add management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/kustomization.yaml
           git commit -m "Add ClusterDeployment for ${{ env.CLUSTER_NAME }} on ${{ env.PROVIDER }}"
           git remote set-url origin https://x-access-token:${{ secrets.CLUSTER_REQUEST_PAT }}@github.com/${{ github.repository }}.git
-          git push origin HEAD:${{ github.event.pull_request.head.ref }} 
+          git push origin HEAD:${{ github.event.pull_request.head.ref }}
+          
+      - name: Add merge instructions comment
+        run: |
+          # Add a comment to the PR with instructions for merging
+          gh pr comment ${{ github.event.pull_request.number }} --body "
+          ## :white_check_mark: Cluster Configuration Ready
+          
+          The cluster configuration for **${{ env.CLUSTER_NAME }}** has been prepared and added to this PR.
+          
+          ### Next Steps:
+          1. Review the generated configuration in \`management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}/\`
+          2. Make any necessary adjustments to the configuration
+          3. **Merge this PR** to trigger the cluster deployment
+          
+          Once merged, the cluster will be deployed automatically via FluxCD.
+          "
+        env:
+          GH_TOKEN: ${{ secrets.CLUSTER_REQUEST_PAT }} 
