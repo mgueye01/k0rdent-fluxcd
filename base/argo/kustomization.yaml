@@ -4,6 +4,9 @@ kind: Kustomization
 namespace: argocd
 resources:
   - namespace.yaml
-  - https://raw.githubusercontent.com/argoproj/argo-cd/v2.14.1/manifests/install.yaml
-patchesStrategicMerge:
-  - argocd-cm-patch.yaml
+  - https://github.com/argoproj/argo-cd//manifests/core-install?ref=v2.14.1
+patches:
+  - path: argocd-cm-patch.yaml
+    target:
+      kind: ConfigMap
+      name: argocd-cm
