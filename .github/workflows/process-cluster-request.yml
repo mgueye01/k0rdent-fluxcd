@@ -42,7 +42,6 @@ jobs:
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.CLUSTER_REQUEST_PAT }}
-          result-encoding: string
           script: |
             const pr = await github.rest.pulls.get({
               owner: context.repo.owner,
@@ -50,14 +49,16 @@ jobs:
               pull_number: ${{ github.event.pull_request.number }}
             });
             
-            return pr.data.body || "";
+            // Save the PR body directly to a file to avoid JSON escaping issues
+            const fs = require('fs');
+            fs.writeFileSync('pr_body.txt', pr.data.body || "");
+            
+            // Output that we wrote the file
+            console.log("PR body saved to pr_body.txt");
           
       - name: Extract cluster information from PR
         id: extract_cluster_info
         run: |
-          # Write PR body to a file to handle special characters better
-          echo '${{ steps.pr_details.outputs.result }}' > pr_body.txt
-          
           # Extract required parameters from PR body
           CLUSTER_NAME=$(grep -A 1 "**Cluster Name**:" pr_body.txt | tail -n 1 | tr -d ' ')
           ENVIRONMENT=$(grep -A 1 "**Environment**:" pr_body.txt | tail -n 1 | tr -d ' ')

@@ -48,7 +48,6 @@ jobs:
         uses: actions/github-script@v6
         with:
           github-token: ${{ secrets.CLUSTER_REQUEST_PAT }}
-          result-encoding: string
           script: |
             const issue = await github.rest.issues.get({
               owner: context.repo.owner,
@@ -56,11 +55,10 @@ jobs:
               issue_number: ${{ github.event.issue.number }}
             });
             
-            // Return a JSON string with the issue title and body
-            return JSON.stringify({
-              title: issue.data.title,
-              body: issue.data.body || ""
-            });
+            // Save the issue title and body as outputs
+            // We'll use separate outputs instead of trying to JSON.parse them later
+            core.setOutput("title", issue.data.title || "");
+            core.setOutput("body", issue.data.body || "");
             
       - name: Create Pull Request
         id: create_pr
@@ -68,16 +66,18 @@ jobs:
         with:
           github-token: ${{ secrets.CLUSTER_REQUEST_PAT }}
           script: |
-            // Parse the issue details from the previous step
-            const issueDetails = JSON.parse('${{ steps.issue_details.outputs.result }}');
+            // Get the issue details from the previous step outputs
+            // No need to parse JSON with this approach
+            const issueTitle = '${{ steps.issue_details.outputs.title }}';
+            const issueBody = '${{ steps.issue_details.outputs.body }}';
             const issueNumber = ${{ github.event.issue.number }};
             
             // Create the pull request
             const pr = await github.rest.pulls.create({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              title: `[Cluster Request] ${issueDetails.title}`,
-              body: `${issueDetails.body}\n\nCreated from issue #${issueNumber}`,
+              title: `[Cluster Request] ${issueTitle}`,
+              body: `${issueBody}\n\nCreated from issue #${issueNumber}`,
               head: "${{ env.BRANCH_NAME }}",
               base: "main"
             });
