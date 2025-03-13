@@ -57,52 +57,107 @@ jobs:
         run: |
           # Extract required parameters from PR body
           CLUSTER_NAME=$(grep -A 1 "**Cluster Name**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          ENVIRONMENT=$(grep -A 1 "**Environment**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          PROVIDER=$(grep -A 10 "**Provider**:" pr_body.txt | grep -m 1 "^- " | tr -d '- ' | tr -d ' ')
           MANAGEMENT_CLUSTER=$(grep -A 1 "**Management Cluster**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          REGION=$(grep -A 1 "**Region/Location**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          
+          # Resource size - need to parse from multiline
+          RESOURCE_SIZE=$(grep -A 5 "**Resource Size**:" pr_body.txt | tail -n 5 | grep -v "<!--")
+          if [[ "$PROVIDER" == *"aws"* ]]; then
+            CONTROL_PLANE_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "control plane" | grep -o "t[0-9]\.[a-z0-9]*\|m[0-9]\.[a-z0-9]*\|c[0-9]\.[a-z0-9]*" || echo "t3.medium")
+            WORKER_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "worker" | grep -o "t[0-9]\.[a-z0-9]*\|m[0-9]\.[a-z0-9]*\|c[0-9]\.[a-z0-9]*" || echo "t3.large")
+          elif [[ "$PROVIDER" == *"azure"* ]]; then
+            CONTROL_PLANE_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "control plane" | grep -o "Standard_[A-Za-z][0-9]\S*" || echo "Standard_D2s_v3")
+            WORKER_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "worker" | grep -o "Standard_[A-Za-z][0-9]\S*" || echo "Standard_D4s_v3")
+          else
+            CONTROL_PLANE_INSTANCE_TYPE="medium"
+            WORKER_INSTANCE_TYPE="large"
+          fi
+          
+          NODE_COUNT=$(grep -A 1 "**Node Count**:" pr_body.txt | tail -n 1 | tr -d ' ' || echo "2")
+          MIN_NODE_COUNT=$(echo "$NODE_COUNT" | awk '{print ($1 > 1) ? $1 - 1 : $1}')
+          MAX_NODE_COUNT=$(echo "$NODE_COUNT" | awk '{print $1 * 2}')
+          
+          TEAM=$(grep -A 1 "**Team**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          PURPOSE=$(grep -A 1 "**Purpose**:" pr_body.txt | tail -n 1 | tr -d ' ')
+          COST_CENTER=$(grep -A 1 "**Cost Center**:" pr_body.txt | tail -n 1 | tr -d ' ' || echo "default")
           
           # Validate required parameters
-          if [ -z "$CLUSTER_NAME" ] || [ -z "$MANAGEMENT_CLUSTER" ]; then
+          if [ -z "$CLUSTER_NAME" ] || [ -z "$PROVIDER" ] || [ -z "$MANAGEMENT_CLUSTER" ]; then
             echo "Error: Missing required parameters in PR description"
             exit 1
           fi
           
           # Set outputs
           echo "CLUSTER_NAME=$CLUSTER_NAME" >> $GITHUB_ENV
+          echo "ENVIRONMENT=$ENVIRONMENT" >> $GITHUB_ENV
+          echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
           echo "MANAGEMENT_CLUSTER=$MANAGEMENT_CLUSTER" >> $GITHUB_ENV
+          echo "REGION=$REGION" >> $GITHUB_ENV
+          echo "CONTROL_PLANE_INSTANCE_TYPE=$CONTROL_PLANE_INSTANCE_TYPE" >> $GITHUB_ENV
+          echo "WORKER_INSTANCE_TYPE=$WORKER_INSTANCE_TYPE" >> $GITHUB_ENV
+          echo "NODE_COUNT=$NODE_COUNT" >> $GITHUB_ENV
+          echo "MIN_NODE_COUNT=$MIN_NODE_COUNT" >> $GITHUB_ENV
+          echo "MAX_NODE_COUNT=$MAX_NODE_COUNT" >> $GITHUB_ENV
+          echo "TEAM=$TEAM" >> $GITHUB_ENV
+          echo "PURPOSE=$PURPOSE" >> $GITHUB_ENV
+          echo "COST_CENTER=$COST_CENTER" >> $GITHUB_ENV
           
           # Debug output
           echo "Deploying cluster:"
           echo "CLUSTER_NAME: $CLUSTER_NAME"
+          echo "ENVIRONMENT: $ENVIRONMENT"
+          echo "PROVIDER: $PROVIDER"
           echo "MANAGEMENT_CLUSTER: $MANAGEMENT_CLUSTER"
+          echo "REGION: $REGION"
+          echo "CONTROL_PLANE_INSTANCE_TYPE: $CONTROL_PLANE_INSTANCE_TYPE"
+          echo "WORKER_INSTANCE_TYPE: $WORKER_INSTANCE_TYPE"
+          echo "NODE_COUNT: $NODE_COUNT"
       
-      - name: Verify cluster files
+      - name: Generate k0rdent Cluster Deployment manifest
         run: |
-          # Check that the cluster deployment files exist
-          CLUSTER_DIR="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}"
+          # Create the final directory structure for k0rdent
+          TARGET_DIR="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}"
+          mkdir -p "$TARGET_DIR"
           
-          if [ ! -d "$CLUSTER_DIR" ]; then
-            echo "Error: Cluster directory not found at $CLUSTER_DIR"
+          # Copy and fill the template
+          TEMPLATE_FILE=".github/templates/cluster-deployments/${{ env.PROVIDER }}/template.yaml"
+          if [ ! -f "$TEMPLATE_FILE" ]; then
+            echo "Error: Template for provider ${{ env.PROVIDER }} not found"
             exit 1
           fi
           
-          if [ ! -f "$CLUSTER_DIR/cluster-deployment.yaml" ]; then
-            echo "Error: cluster-deployment.yaml not found in $CLUSTER_DIR"
-            exit 1
-          fi
+          # Use envsubst to replace variables in the template
+          cat "$TEMPLATE_FILE" | \
+          envsubst '$CLUSTER_NAME $ENVIRONMENT $REGION $CONTROL_PLANE_INSTANCE_TYPE $WORKER_INSTANCE_TYPE $NODE_COUNT $MIN_NODE_COUNT $MAX_NODE_COUNT $TEAM $PURPOSE $COST_CENTER' \
+          > "$TARGET_DIR/cluster-deployment.yaml"
           
-          if [ ! -f "$CLUSTER_DIR/kustomization.yaml" ]; then
-            echo "Error: kustomization.yaml not found in $CLUSTER_DIR"
-            exit 1
-          fi
+          # Create kustomization.yaml for the cluster
+          cat > "$TARGET_DIR/kustomization.yaml" << EOF
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources:
+          - cluster-deployment.yaml
+          EOF
           
-          echo "Cluster deployment files verified successfully"
-      
-      - name: Apply cluster deployment to FluxCD
-        run: |
-          echo "Applying cluster deployment for ${{ env.CLUSTER_NAME }} to the ${{ env.MANAGEMENT_CLUSTER }} management cluster"
-          
-          # Update the main kustomization.yaml if it's not already updated
+          # Update main kustomization.yaml for cluster-deployments
           MAIN_KUSTOMIZATION="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/kustomization.yaml"
-          if ! grep -q "${{ env.CLUSTER_NAME }}" "$MAIN_KUSTOMIZATION"; then
+          
+          # Create the main kustomization.yaml if it doesn't exist
+          if [ ! -f "$MAIN_KUSTOMIZATION" ]; then
+            mkdir -p $(dirname "$MAIN_KUSTOMIZATION")
+            cat > "$MAIN_KUSTOMIZATION" << EOF
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources: []
+          EOF
+          fi
+          
+          # Update the main kustomization.yaml to include the new cluster
+          if grep -q "${{ env.CLUSTER_NAME }}" "$MAIN_KUSTOMIZATION"; then
+            echo "Cluster already exists in kustomization.yaml, skipping update"
+          else
             # Check if resources: [] is in the file and replace it
             if grep -q "resources: \[\]" "$MAIN_KUSTOMIZATION"; then
               sed -i "s|resources: \[\]|resources:\n- ${{ env.CLUSTER_NAME }}|g" "$MAIN_KUSTOMIZATION"
@@ -110,14 +165,104 @@ jobs:
               # Append to existing resources list
               sed -i "/resources:/a \ - ${{ env.CLUSTER_NAME }}" "$MAIN_KUSTOMIZATION"
             fi
-            
-            # Commit and push the changes
-            git add "$MAIN_KUSTOMIZATION"
-            git commit -m "Update kustomization.yaml to include ${{ env.CLUSTER_NAME }} cluster deployment"
-            git push origin main
           fi
           
-          # Add a comment to the PR
-          gh pr comment ${{ env.PR_NUMBER }} --body "Cluster deployment for ${{ env.CLUSTER_NAME }} has been applied to the ${{ env.MANAGEMENT_CLUSTER }} management cluster via FluxCD."
+          # Add a file containing deployment metadata for tracking
+          cat > "$TARGET_DIR/k0rdent-metadata.yaml" << EOF
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: ${{ env.CLUSTER_NAME }}-metadata
+            namespace: k0rdent-system
+          data:
+            cluster_name: "${{ env.CLUSTER_NAME }}"
+            provider: "${{ env.PROVIDER }}"
+            environment: "${{ env.ENVIRONMENT }}"
+            region: "${{ env.REGION }}"
+            management_cluster: "${{ env.MANAGEMENT_CLUSTER }}"
+            team: "${{ env.TEAM }}"
+            purpose: "${{ env.PURPOSE }}"
+            cost_center: "${{ env.COST_CENTER }}"
+            created_at: "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            created_by: "github-actions"
+            pr_number: "${{ env.PR_NUMBER }}"
+          EOF
+          
+          # Update the cluster kustomization to include the metadata
+          sed -i "/- cluster-deployment.yaml/a \ - k0rdent-metadata.yaml" "$TARGET_DIR/kustomization.yaml"
+          
+          # Check if we created the files correctly
+          echo "Verifying k0rdent cluster deployment files:"
+          ls -la "$TARGET_DIR"
+          
+      - name: Verify ArgoCD/FluxCD structure
+        run: |
+          # Verify that the structure follows k0rdent expectations
+          # These checks are to ensure that ArgoCD can reconcile the resources
+          
+          echo "Verifying ArgoCD/FluxCD structure for k0rdent..."
+          
+          # Check main kustomization
+          MAIN_KUSTOMIZATION="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/kustomization.yaml"
+          if [ ! -f "$MAIN_KUSTOMIZATION" ]; then
+            echo "Error: Main kustomization.yaml not found at $MAIN_KUSTOMIZATION"
+            exit 1
+          fi
+          
+          # Check cluster directory
+          CLUSTER_DIR="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}"
+          if [ ! -d "$CLUSTER_DIR" ]; then
+            echo "Error: Cluster directory not found at $CLUSTER_DIR"
+            exit 1
+          fi
+          
+          # Check cluster deployment file
+          if [ ! -f "$CLUSTER_DIR/cluster-deployment.yaml" ]; then
+            echo "Error: cluster-deployment.yaml not found in $CLUSTER_DIR"
+            exit 1
+          fi
+          
+          # Check cluster kustomization
+          if [ ! -f "$CLUSTER_DIR/kustomization.yaml" ]; then
+            echo "Error: kustomization.yaml not found in $CLUSTER_DIR"
+            exit 1
+          fi
+          
+          # Check metadata file
+          if [ ! -f "$CLUSTER_DIR/k0rdent-metadata.yaml" ]; then
+            echo "Error: k0rdent-metadata.yaml not found in $CLUSTER_DIR"
+            exit 1
+          fi
+          
+          echo "Directory structure verification successful"
+          
+      - name: Commit and push final deployment
+        run: |
+          git add management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}
+          git add management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/kustomization.yaml
+          git commit -m "Deploy ClusterDeployment for ${{ env.CLUSTER_NAME }} on ${{ env.PROVIDER }}"
+          git remote set-url origin https://x-access-token:${{ secrets.CLUSTER_REQUEST_PAT }}@github.com/${{ github.repository }}.git
+          git push origin main
+          
+      - name: Add deployment notification comment
+        run: |
+          # Add a comment to the PR with deployment information
+          gh pr comment ${{ env.PR_NUMBER }} --body "
+          ## :rocket: Cluster Deployment Initiated
+          
+          The cluster deployment for **${{ env.CLUSTER_NAME }}** has been submitted to the ${{ env.MANAGEMENT_CLUSTER }} management cluster.
+          
+          ### Deployment Details:
+          - **Cluster Name**: ${{ env.CLUSTER_NAME }}
+          - **Provider**: ${{ env.PROVIDER }}
+          - **Environment**: ${{ env.ENVIRONMENT }}
+          - **Region**: ${{ env.REGION }}
+          - **Management Cluster**: ${{ env.MANAGEMENT_CLUSTER }}
+          
+          The k0rdent Cluster Manager (KCM) will now process this request and create the Kubernetes cluster.
+          You can monitor the progress in ArgoCD or through the k0rdent dashboard.
+          
+          Deployment path: \`management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}\`
+          "
         env:
           GH_TOKEN: ${{ secrets.CLUSTER_REQUEST_PAT }} 

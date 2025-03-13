@@ -1,0 +1,40 @@
+---
+apiVersion: cluster.k0rdent.io/v1alpha1
+kind: ClusterDeployment
+metadata:
+  name: ${CLUSTER_NAME}
+  labels:
+    environment: ${ENVIRONMENT}
+    team: ${TEAM}
+    purpose: ${PURPOSE}
+    cost-center: ${COST_CENTER}
+    k0rdent.io/managed: "true"
+spec:
+  clusterName: ${CLUSTER_NAME}
+  provider: aws
+  region: ${REGION}
+  version: "1.26"
+  controlPlane:
+    instanceType: ${CONTROL_PLANE_INSTANCE_TYPE}
+    count: 1
+    spotInstances: false
+  workers:
+    instanceType: ${WORKER_INSTANCE_TYPE}
+    count: ${NODE_COUNT}
+    minCount: ${MIN_NODE_COUNT}
+    maxCount: ${MAX_NODE_COUNT}
+    spotInstances: false
+  networking:
+    podCIDR: "192.168.0.0/16"
+    serviceCIDR: "10.96.0.0/12"
+  addons:
+    ingressController: true
+    certManager: true
+    monitoring: true
+    logging: true
+  tags:
+    environment: ${ENVIRONMENT}
+    team: ${TEAM}
+    purpose: ${PURPOSE}
+    cost-center: ${COST_CENTER}
+    created-by: "k0rdent-fluxcd" 

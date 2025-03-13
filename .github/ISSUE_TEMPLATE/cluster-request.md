@@ -1,63 +1,57 @@
 ---
-name: New Cluster Request
-about: Request a new k0rdent managed cluster
-title: "[CLUSTER REQUEST] - "
+name: Kubernetes Cluster Request
+about: Request a new Kubernetes cluster managed by k0rdent
+title: "[Cluster Request] "
 labels: cluster-request
 assignees: ''
+
 ---
 
 ## Cluster Information
 
-**Cluster Name**: 
-<!-- Name of the cluster (alphanumeric, dash allowed, no spaces) -->
+**Cluster Name**:
+<!-- Required: Name for the cluster (lowercase alphanumeric and dashes only) -->
 
 **Environment**:
-<!-- e.g., dev, staging, production -->
+<!-- Required: dev, staging, prod, etc. -->
 
 **Provider**:
-<!-- Choose one:
-- aws-eks
-- aws-standalone
-- aws-hosted-cp 
-- azure-aks
-- azure-standalone
-- azure-hosted-cp
-- vsphere-standalone
-- vsphere-hosted-cp
-- openstack-standalone
--->
+<!-- Required: Choose one of the following cloud providers -->
+- aws
+- azure
+- gcp
+- vsphere
 
 **Management Cluster**:
-<!-- Specify which management cluster should manage this cluster -->
+<!-- Required: Which management cluster should manage this cluster -->
 
 **Region/Location**:
-<!-- AWS region, Azure region, or datacenter location -->
+<!-- Required: AWS region, Azure region, GCP zone, or vSphere datacenter -->
 
 **Resource Size**:
-<!-- 
-For cloud providers, specify instance types for control plane and worker nodes
-For on-prem, specify CPU/RAM/Storage requirements
--->
+<!-- Specify instance types for control plane and worker nodes -->
+- Control Plane: <!-- e.g., t3.medium for AWS, Standard_D2s_v3 for Azure -->
+- Worker Nodes: <!-- e.g., t3.large for AWS, Standard_D4s_v3 for Azure -->
 
 **Node Count**:
-<!-- Number of worker nodes for the cluster -->
+<!-- Number of worker nodes (min 1) -->
 
-**Additional Configuration**:
-<!-- Any other specific requirements for the cluster -->
+**Team**:
+<!-- Team responsible for this cluster -->
+
+**Purpose**:
+<!-- Brief description of what this cluster will be used for -->
+
+**Cost Center**:
+<!-- For billing/chargeback -->
+
+**Additional Requirements**:
+<!-- Any specific requirements or additional information -->
 
 ## Business Justification
 
-**Purpose**:
-<!-- What will this cluster be used for? -->
-
-**Team**:
-<!-- Which team will be using this cluster? -->
-
 **Duration**:
 <!-- How long will the cluster be needed? Temporary or permanent? -->
-
-**Cost Center**:
-<!-- If applicable, which cost center should be charged -->
 
 ## Approvals
 <!-- Leave this section - it will be filled by approvers -->
