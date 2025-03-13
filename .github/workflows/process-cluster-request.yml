@@ -132,9 +132,22 @@ jobs:
           fi
           
           # Export variables to environment for use in other steps
-          jq -r 'to_entries | .[] | "echo \"\(.key)=\(.value)\" >> $GITHUB_ENV"' cluster_vars.json > export_vars.sh
-          chmod +x export_vars.sh
-          ./export_vars.sh
+          # More reliable method to export variables to GITHUB_ENV
+          echo "cluster_name=$CLUSTER_NAME" >> $GITHUB_ENV
+          echo "environment=$ENVIRONMENT" >> $GITHUB_ENV
+          echo "provider=$PROVIDER" >> $GITHUB_ENV
+          echo "management_cluster=$MANAGEMENT_CLUSTER" >> $GITHUB_ENV
+          echo "region=$REGION" >> $GITHUB_ENV
+          echo "control_plane_instance_type=$CONTROL_PLANE_INSTANCE_TYPE" >> $GITHUB_ENV
+          echo "worker_instance_type=$WORKER_INSTANCE_TYPE" >> $GITHUB_ENV
+          echo "node_count=$NODE_COUNT" >> $GITHUB_ENV
+          echo "min_node_count=$MIN_NODE_COUNT" >> $GITHUB_ENV
+          echo "max_node_count=$MAX_NODE_COUNT" >> $GITHUB_ENV
+          echo "team=$TEAM" >> $GITHUB_ENV
+          echo "purpose=$PURPOSE" >> $GITHUB_ENV
+          echo "cost_center=$COST_CENTER" >> $GITHUB_ENV
+          echo "created_at=$TIMESTAMP" >> $GITHUB_ENV
+          echo "pr_number=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
           
           # Debug output
           echo "Extracted parameters:"
