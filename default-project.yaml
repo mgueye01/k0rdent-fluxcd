@@ -4,11 +4,17 @@ metadata:
   name: default
   namespace: argocd
 spec:
+  # Allow management of all cluster resources
   clusterResourceWhitelist:
   - group: '*'
     kind: '*'
+  # Allow deployment to any namespace
   destinations:
   - namespace: '*'
     server: '*'
+  # Allow any source repository
   sourceRepos:
+  - '*'
+  # Allow all OCI repositories
+  sourceNamespaces:
   - '*'

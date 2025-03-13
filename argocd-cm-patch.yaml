@@ -7,5 +7,17 @@ metadata:
     app.kubernetes.io/name: argocd-cm
     app.kubernetes.io/part-of: argocd
 data:
+  # Enable Helm support
   helm.enabled: "true"
+  # Enable OCI support for Helm charts
   helm.oci.enabled: "true"
+  # Enable Kustomize support
+  kustomize.enabled: "true"
+  # Set resource exclusions to improve performance
+  resource.exclusions: |
+    - apiGroups:
+      - internal.open-cluster-management.io
+      kinds:
+      - ManagedClusterInfo
+      clusters:
+      - "*"

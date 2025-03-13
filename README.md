@@ -112,13 +112,34 @@ If you already use FluxCD and didn't install using the current setup guide, add 
 
 Currently only KCM k0rdent component is installed with this repo. When KCM controller is installed, it starts to bootstrap all the required configuration, providers and components. To monitor the KCM installation you can watch the `Management` type object. By default, it's called `kcm`. 
 
-> Creation of the Management object can take some time
+> [!NOTE]
+> The creation and full deployment of the Management object can take some time (typically 10-20 minutes). During this time, you may see the Management object in a not-READY state, and ClusterTemplates showing as not valid with errors like "one or more required providers are not deployed yet". This is expected behavior as the providers are being deployed.
+
+You can check the status of the Management object with:
 
 ```shell
 kubectl -n kcm-system get management.k0rdent.mirantis.com kcm -o go-template='{{range $key, $value := .status.components}}{{$key}}: {{if $value.success}}{{$value.success}}{{else}}{{$value.error}}{{end}}{{"\n"}}{{end}}'
 ```
 
 All components in the list must have the value `true`
+
+You can also check the status of the ArgoCD applications to ensure they're syncing properly:
+
+```shell
+kubectl -n argocd get applications
+```
+
+And verify that the provider templates are valid:
+
+```shell
+kubectl get providertemplates.k0rdent.mirantis.com
+```
+
+Once the providers are fully deployed, the ClusterTemplates will become valid:
+
+```shell
+kubectl -n kcm-system get clustertemplates.k0rdent.mirantis.com
+```
 
 ### Optional: Enable Renovatebot for Dependency Updates
 
