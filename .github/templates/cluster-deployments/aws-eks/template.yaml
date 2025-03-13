@@ -1,0 +1,27 @@
+apiVersion: k0rdent.mirantis.com/v1alpha1
+kind: ClusterDeployment
+metadata:
+  name: ${CLUSTER_NAME}
+  namespace: kcm-system
+spec:
+  clusterName: ${CLUSTER_NAME}
+  template:
+    name: aws-eks-0-1-0
+    namespace: kcm-system
+  values:
+    region: ${REGION}
+    controlPlane:
+      instanceType: ${CONTROL_PLANE_INSTANCE_TYPE}
+    nodeGroups:
+      - name: workers
+        machineType: ${WORKER_INSTANCE_TYPE}
+        desiredCapacity: ${NODE_COUNT}
+        minSize: ${MIN_NODE_COUNT}
+        maxSize: ${MAX_NODE_COUNT}
+    kubernetesVersion: "1.28"
+    tags:
+      environment: ${ENVIRONMENT}
+      team: ${TEAM}
+      purpose: ${PURPOSE}
+      costCenter: ${COST_CENTER}
+      managedBy: k0rdent 

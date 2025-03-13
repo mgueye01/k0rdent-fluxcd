@@ -1,0 +1,29 @@
+apiVersion: k0rdent.mirantis.com/v1alpha1
+kind: ClusterDeployment
+metadata:
+  name: ${CLUSTER_NAME}
+  namespace: kcm-system
+spec:
+  clusterName: ${CLUSTER_NAME}
+  template:
+    name: azure-aks-0-1-0
+    namespace: kcm-system
+  values:
+    location: ${REGION}
+    resourceGroup: rg-${CLUSTER_NAME}
+    controlPlane:
+      vmSize: ${CONTROL_PLANE_INSTANCE_TYPE}
+    nodePools:
+      - name: workers
+        vmSize: ${WORKER_INSTANCE_TYPE}
+        count: ${NODE_COUNT}
+        minCount: ${MIN_NODE_COUNT}
+        maxCount: ${MAX_NODE_COUNT}
+        mode: System
+    kubernetesVersion: "1.28"
+    tags:
+      environment: ${ENVIRONMENT}
+      team: ${TEAM}
+      purpose: ${PURPOSE}
+      costCenter: ${COST_CENTER}
+      managedBy: k0rdent 

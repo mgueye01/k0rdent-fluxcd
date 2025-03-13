@@ -1,0 +1,137 @@
+name: Process Cluster Request
+
+on:
+  # Triggered when a PR with the cluster-request label is approved
+  pull_request_review:
+    types: [submitted]
+
+jobs:
+  process-cluster-request:
+    if: |
+      github.event.review.state == 'approved' &&
+      contains(github.event.pull_request.labels.*.name, 'cluster-request')
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          
+      - name: Set up Git
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+      
+      - name: Install Task
+        uses: arduino/setup-task@v1
+        with:
+          version: '3.x'
+          
+      - name: Install gomplate
+        run: |
+          curl -o /usr/local/bin/gomplate -sSL https://github.com/hairyhenderson/gomplate/releases/download/v3.11.5/gomplate_linux-amd64
+          chmod +x /usr/local/bin/gomplate
+          
+      - name: Initialize configuration
+        run: task init
+        
+      - name: Extract cluster information from PR
+        id: extract_cluster_info
+        run: |
+          PR_BODY="${{ github.event.pull_request.body }}"
+          
+          # Extract required parameters from PR body
+          CLUSTER_NAME=$(echo "$PR_BODY" | grep -A 1 "**Cluster Name**:" | tail -n 1 | tr -d ' ')
+          ENVIRONMENT=$(echo "$PR_BODY" | grep -A 1 "**Environment**:" | tail -n 1 | tr -d ' ')
+          PROVIDER=$(echo "$PR_BODY" | grep -A 10 "**Provider**:" | grep -m 1 "^- " | tr -d '- ' | tr -d ' ')
+          MANAGEMENT_CLUSTER=$(echo "$PR_BODY" | grep -A 1 "**Management Cluster**:" | tail -n 1 | tr -d ' ')
+          REGION=$(echo "$PR_BODY" | grep -A 1 "**Region/Location**:" | tail -n 1 | tr -d ' ')
+          
+          # Resource size - need to parse from multiline
+          RESOURCE_SIZE=$(echo "$PR_BODY" | grep -A 5 "**Resource Size**:" | tail -n 5 | grep -v "<!--")
+          if [[ "$PROVIDER" == *"aws"* ]]; then
+            CONTROL_PLANE_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "control plane" | grep -o "t[0-9]\.[a-z0-9]*\|m[0-9]\.[a-z0-9]*\|c[0-9]\.[a-z0-9]*" || echo "t3.medium")
+            WORKER_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "worker" | grep -o "t[0-9]\.[a-z0-9]*\|m[0-9]\.[a-z0-9]*\|c[0-9]\.[a-z0-9]*" || echo "t3.large")
+          elif [[ "$PROVIDER" == *"azure"* ]]; then
+            CONTROL_PLANE_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "control plane" | grep -o "Standard_[A-Za-z][0-9]\S*" || echo "Standard_D2s_v3")
+            WORKER_INSTANCE_TYPE=$(echo "$RESOURCE_SIZE" | grep -i "worker" | grep -o "Standard_[A-Za-z][0-9]\S*" || echo "Standard_D4s_v3")
+          else
+            CONTROL_PLANE_INSTANCE_TYPE="medium"
+            WORKER_INSTANCE_TYPE="large"
+          fi
+          
+          NODE_COUNT=$(echo "$PR_BODY" | grep -A 1 "**Node Count**:" | tail -n 1 | tr -d ' ' || echo "2")
+          MIN_NODE_COUNT=$(echo "$NODE_COUNT" | awk '{print ($1 > 1) ? $1 - 1 : $1}')
+          MAX_NODE_COUNT=$(echo "$NODE_COUNT" | awk '{print $1 * 2}')
+          
+          TEAM=$(echo "$PR_BODY" | grep -A 1 "**Team**:" | tail -n 1 | tr -d ' ')
+          PURPOSE=$(echo "$PR_BODY" | grep -A 1 "**Purpose**:" | tail -n 1 | tr -d ' ')
+          COST_CENTER=$(echo "$PR_BODY" | grep -A 1 "**Cost Center**:" | tail -n 1 | tr -d ' ' || echo "default")
+          
+          # Validate required parameters
+          if [ -z "$CLUSTER_NAME" ] || [ -z "$PROVIDER" ] || [ -z "$MANAGEMENT_CLUSTER" ]; then
+            echo "Error: Missing required parameters in PR description"
+            exit 1
+          fi
+          
+          # Set outputs
+          echo "CLUSTER_NAME=$CLUSTER_NAME" >> $GITHUB_ENV
+          echo "ENVIRONMENT=$ENVIRONMENT" >> $GITHUB_ENV
+          echo "PROVIDER=$PROVIDER" >> $GITHUB_ENV
+          echo "MANAGEMENT_CLUSTER=$MANAGEMENT_CLUSTER" >> $GITHUB_ENV
+          echo "REGION=$REGION" >> $GITHUB_ENV
+          echo "CONTROL_PLANE_INSTANCE_TYPE=$CONTROL_PLANE_INSTANCE_TYPE" >> $GITHUB_ENV
+          echo "WORKER_INSTANCE_TYPE=$WORKER_INSTANCE_TYPE" >> $GITHUB_ENV
+          echo "NODE_COUNT=$NODE_COUNT" >> $GITHUB_ENV
+          echo "MIN_NODE_COUNT=$MIN_NODE_COUNT" >> $GITHUB_ENV
+          echo "MAX_NODE_COUNT=$MAX_NODE_COUNT" >> $GITHUB_ENV
+          echo "TEAM=$TEAM" >> $GITHUB_ENV
+          echo "PURPOSE=$PURPOSE" >> $GITHUB_ENV
+          echo "COST_CENTER=$COST_CENTER" >> $GITHUB_ENV
+      
+      - name: Generate Cluster Deployment file
+        run: |
+          TARGET_DIR="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}"
+          mkdir -p "$TARGET_DIR"
+          
+          # Copy and fill the template
+          TEMPLATE_FILE=".github/templates/cluster-deployments/${{ env.PROVIDER }}/template.yaml"
+          if [ ! -f "$TEMPLATE_FILE" ]; then
+            echo "Error: Template for provider ${{ env.PROVIDER }} not found"
+            exit 1
+          fi
+          
+          # Use envsubst to replace variables in the template
+          cat "$TEMPLATE_FILE" | \
+          envsubst '$CLUSTER_NAME $ENVIRONMENT $REGION $CONTROL_PLANE_INSTANCE_TYPE $WORKER_INSTANCE_TYPE $NODE_COUNT $MIN_NODE_COUNT $MAX_NODE_COUNT $TEAM $PURPOSE $COST_CENTER' \
+          > "$TARGET_DIR/cluster-deployment.yaml"
+          
+          # Create kustomization.yaml
+          cat > "$TARGET_DIR/kustomization.yaml" << EOF
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources:
+          - cluster-deployment.yaml
+          EOF
+          
+          # Update main kustomization.yaml for cluster-deployments
+          MAIN_KUSTOMIZATION="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/kustomization.yaml"
+          if grep -q "${{ env.CLUSTER_NAME }}" "$MAIN_KUSTOMIZATION"; then
+            echo "Cluster already exists in kustomization.yaml, skipping update"
+          else
+            # Check if resources: [] is in the file and replace it
+            if grep -q "resources: \[\]" "$MAIN_KUSTOMIZATION"; then
+              sed -i "s|resources: \[\]|resources:\n- ${{ env.CLUSTER_NAME }}|g" "$MAIN_KUSTOMIZATION"
+            else
+              # Append to existing resources list
+              sed -i "/resources:/a \ - ${{ env.CLUSTER_NAME }}" "$MAIN_KUSTOMIZATION"
+            fi
+          fi
+          
+      - name: Commit changes
+        run: |
+          git add management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/${{ env.CLUSTER_NAME }}
+          git add management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/kustomization.yaml
+          git commit -m "Add ClusterDeployment for ${{ env.CLUSTER_NAME }} on ${{ env.PROVIDER }}"
+          git push origin HEAD:${{ github.event.pull_request.head.ref }} 

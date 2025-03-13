@@ -178,3 +178,60 @@ The tool must be from within this cloned repository:
 1. Review and modify the generated configuration files as needed.
 1. Commit and push the files to your Git repository.
 1. Watch your GitOps-managed cluster to sync the state.
+
+## Requesting New Managed Clusters through GitOps
+
+This repository includes an automated workflow for developers to request new k0rdent-managed clusters through a GitOps approach.
+
+### For Developers: How to Request a New Cluster
+
+1. **Create a New Issue**
+   - Go to the Issues tab in this repository
+   - Click "New Issue"
+   - Select the "New Cluster Request" template
+   - Fill out all required fields in the template, including:
+     - Cluster name
+     - Environment (dev, staging, prod)
+     - Provider (AWS EKS, Azure AKS, etc.)
+     - Management cluster
+     - Region/location
+     - Resource size specifications
+     - Node count
+     - Business justification
+   - Submit the issue
+
+2. **Issue to PR Workflow**
+   - Once you submit the issue with the required information, a GitHub Action will automatically:
+     - Create a new branch
+     - Convert the issue into a pull request
+     - Apply the 'cluster-request' label to the PR
+     - Close the original issue (linking to the PR)
+
+3. **Request Review**
+   - Request review from the platform team or designated approvers
+   - They may ask for clarification or adjustments to your request
+
+4. **Approval and Deployment**
+   - Once approved, a GitHub Action will automatically:
+     - Generate the necessary ClusterDeployment manifest based on your specifications
+     - Commit the changes to your PR branch
+     - Update the PR with the generated files
+   - After merging, ArgoCD will detect the changes and deploy the new cluster through k0rdent
+
+### For Administrators: Managing Cluster Requests
+
+1. **Review Pull Requests**
+   - Monitor PRs with the 'cluster-request' label
+   - Evaluate the business justification and technical specifications
+   - Request adjustments if necessary
+   - Approve valid requests
+
+2. **Observe Deployment**
+   - After PR approval and merge, monitor the k0rdent dashboard for the new cluster
+   - The ClusterDeployment will be automatically processed by k0rdent
+
+3. **Troubleshooting**
+   - If cluster creation fails, check the k0rdent logs
+   - Adjust the ClusterDeployment manifest as needed
+
+This GitOps workflow ensures consistent, documented, and auditable cluster provisioning while reducing manual steps and potential errors.

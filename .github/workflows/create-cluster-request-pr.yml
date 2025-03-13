@@ -1,0 +1,89 @@
+name: Create PR from Cluster Request Issue
+
+on:
+  issues:
+    types: [labeled]
+
+jobs:
+  create-pr-from-issue:
+    # Only run when the 'cluster-request' label is added to an issue
+    if: github.event.label.name == 'cluster-request'
+    runs-on: ubuntu-latest
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+          
+      - name: Set up Git
+        run: |
+          git config --global user.name "GitHub Actions Bot"
+          git config --global user.email "actions@github.com"
+          
+      - name: Create branch from issue
+        id: create_branch
+        run: |
+          ISSUE_NUMBER="${{ github.event.issue.number }}"
+          ISSUE_TITLE="${{ github.event.issue.title }}"
+          SANITIZED_TITLE=$(echo "$ISSUE_TITLE" | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]')
+          BRANCH_NAME="cluster-request/$ISSUE_NUMBER-$SANITIZED_TITLE"
+          
+          git checkout -b "$BRANCH_NAME"
+          
+          # Create a placeholder file to initialize the PR
+          mkdir -p .github/placeholder
+          echo "This PR is created from issue #$ISSUE_NUMBER" > .github/placeholder/cluster-request-$ISSUE_NUMBER.md
+          
+          git add .github/placeholder/cluster-request-$ISSUE_NUMBER.md
+          git commit -m "Initialize cluster request for issue #$ISSUE_NUMBER"
+          git push origin "$BRANCH_NAME"
+          
+          echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
+          
+      - name: Create Pull Request
+        id: create_pr
+        uses: actions/github-script@v6
+        with:
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            const issueNumber = ${{ github.event.issue.number }};
+            const issueTitle = "${{ github.event.issue.title }}";
+            const issueBody = "${{ github.event.issue.body }}";
+            
+            // Create the pull request
+            const pr = await github.rest.pulls.create({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              title: `[Cluster Request] ${issueTitle}`,
+              body: issueBody + "\n\nCreated from issue #" + issueNumber,
+              head: "${{ env.BRANCH_NAME }}",
+              base: "main"
+            });
+            
+            // Apply the cluster-request label
+            await github.rest.issues.addLabels({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: pr.data.number,
+              labels: ['cluster-request']
+            });
+            
+            // Link the PR to the issue
+            await github.rest.issues.createComment({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              body: `Pull Request #${pr.data.number} has been created for this cluster request.`
+            });
+            
+            // Close the issue as it's now tracked by a PR
+            await github.rest.issues.update({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: issueNumber,
+              state: 'closed',
+              state_reason: 'completed'
+            });
+            
+            return pr.data.number; 
