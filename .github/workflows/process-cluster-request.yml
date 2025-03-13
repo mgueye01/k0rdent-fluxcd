@@ -26,19 +26,6 @@ jobs:
         run: |
           git config --global user.name "GitHub Actions Bot"
           git config --global user.email "actions@github.com"
-      
-      - name: Install Task
-        uses: arduino/setup-task@v1
-        with:
-          version: '3.x'
-          
-      - name: Install gomplate
-        run: |
-          curl -o /usr/local/bin/gomplate -sSL https://github.com/hairyhenderson/gomplate/releases/download/v3.11.5/gomplate_linux-amd64
-          chmod +x /usr/local/bin/gomplate
-          
-      - name: Initialize configuration
-        run: task init
         
       - name: Fetch PR details
         id: pr_details
@@ -143,6 +130,17 @@ jobs:
           
           # Update main kustomization.yaml for cluster-deployments
           MAIN_KUSTOMIZATION="management-clusters/${{ env.MANAGEMENT_CLUSTER }}/k0rdent/cluster-deployments/kustomization.yaml"
+          
+          # Create the main kustomization.yaml if it doesn't exist
+          if [ ! -f "$MAIN_KUSTOMIZATION" ]; then
+            mkdir -p $(dirname "$MAIN_KUSTOMIZATION")
+            cat > "$MAIN_KUSTOMIZATION" << EOF
+          apiVersion: kustomize.config.k8s.io/v1beta1
+          kind: Kustomization
+          resources: []
+          EOF
+          fi
+          
           if grep -q "${{ env.CLUSTER_NAME }}" "$MAIN_KUSTOMIZATION"; then
             echo "Cluster already exists in kustomization.yaml, skipping update"
           else
@@ -154,6 +152,30 @@ jobs:
               sed -i "/resources:/a \ - ${{ env.CLUSTER_NAME }}" "$MAIN_KUSTOMIZATION"
             fi
           fi
+          
+          # Add a file containing deployment metadata for tracking
+          cat > "$TARGET_DIR/k0rdent-metadata.yaml" << EOF
+          apiVersion: v1
+          kind: ConfigMap
+          metadata:
+            name: ${{ env.CLUSTER_NAME }}-metadata
+            namespace: k0rdent-system
+          data:
+            cluster_name: "${{ env.CLUSTER_NAME }}"
+            provider: "${{ env.PROVIDER }}"
+            environment: "${{ env.ENVIRONMENT }}"
+            region: "${{ env.REGION }}"
+            management_cluster: "${{ env.MANAGEMENT_CLUSTER }}"
+            team: "${{ env.TEAM }}"
+            purpose: "${{ env.PURPOSE }}"
+            cost_center: "${{ env.COST_CENTER }}"
+            created_at: "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+            created_by: "github-actions"
+            pr_number: "${{ github.event.pull_request.number }}"
+          EOF
+          
+          # Update the cluster kustomization to include the metadata
+          sed -i "/- cluster-deployment.yaml/a \ - k0rdent-metadata.yaml" "$TARGET_DIR/kustomization.yaml"
           
       - name: Commit changes
         run: |
@@ -176,7 +198,7 @@ jobs:
           2. Make any necessary adjustments to the configuration
           3. **Merge this PR** to trigger the cluster deployment
           
-          Once merged, the cluster will be deployed automatically via FluxCD.
+          Once merged, the cluster configuration will be picked up by ArgoCD and k0rdent will create the cluster.
           "
         env:
           GH_TOKEN: ${{ secrets.CLUSTER_REQUEST_PAT }} 
