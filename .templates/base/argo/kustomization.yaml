@@ -5,3 +5,5 @@ namespace: {{ .gitops.argo.namespace }}
 resources:
   - namespace.yaml
   - https://github.com/argoproj/argo-cd//manifests/{{ .gitops.argo.flavor }}?ref={{ .gitops.argo.version }}
+patchesStrategicMerge:
+  - argocd-cm-patch.yaml
