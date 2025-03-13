@@ -37,24 +37,18 @@ jobs:
       - name: Initialize configuration
         run: task init
         
-      - name: Get PR Details
+      - name: Fetch PR details
         id: pr_details
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.CLUSTER_REQUEST_PAT }}
-          script: |
-            const pr = await github.rest.pulls.get({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              pull_number: ${{ github.event.pull_request.number }}
-            });
-            
-            // Save the PR body directly to a file to avoid JSON escaping issues
-            const fs = require('fs');
-            fs.writeFileSync('pr_body.txt', pr.data.body || "");
-            
-            // Output that we wrote the file
-            console.log("PR body saved to pr_body.txt");
+        run: |
+          # Store PR number for later use
+          echo "PR_NUMBER=${{ github.event.pull_request.number }}" >> $GITHUB_ENV
+          
+          # Fetch PR details using GitHub CLI and save to file
+          gh pr view ${{ github.event.pull_request.number }} --json body -q .body > pr_body.txt
+          
+          echo "PR body saved to pr_body.txt"
+        env:
+          GH_TOKEN: ${{ secrets.CLUSTER_REQUEST_PAT }}
           
       - name: Extract cluster information from PR
         id: extract_cluster_info

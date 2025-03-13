@@ -43,7 +43,7 @@ jobs:
           
           echo "BRANCH_NAME=$BRANCH_NAME" >> $GITHUB_ENV
           
-      - name: Get issue details
+      - name: Get issue and write to file
         id: issue_details
         uses: actions/github-script@v6
         with:
@@ -55,56 +55,39 @@ jobs:
               issue_number: ${{ github.event.issue.number }}
             });
             
-            // Save the issue title and body as outputs
-            // We'll use separate outputs instead of trying to JSON.parse them later
-            core.setOutput("title", issue.data.title || "");
-            core.setOutput("body", issue.data.body || "");
+            // Write issue data to files
+            const fs = require('fs');
+            fs.writeFileSync('issue_title.txt', issue.data.title || "");
+            fs.writeFileSync('issue_body.txt', issue.data.body || "");
+            
+            console.log("Issue data saved to files");
+            
+      - name: Read issue data
+        id: read_issue
+        run: |
+          ISSUE_TITLE=$(cat issue_title.txt)
+          echo "ISSUE_TITLE=$ISSUE_TITLE" >> $GITHUB_ENV
+          echo "ISSUE_NUMBER=${{ github.event.issue.number }}" >> $GITHUB_ENV
             
       - name: Create Pull Request
         id: create_pr
-        uses: actions/github-script@v6
-        with:
-          github-token: ${{ secrets.CLUSTER_REQUEST_PAT }}
-          script: |
-            // Get the issue details from the previous step outputs
-            // No need to parse JSON with this approach
-            const issueTitle = '${{ steps.issue_details.outputs.title }}';
-            const issueBody = '${{ steps.issue_details.outputs.body }}';
-            const issueNumber = ${{ github.event.issue.number }};
-            
-            // Create the pull request
-            const pr = await github.rest.pulls.create({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              title: `[Cluster Request] ${issueTitle}`,
-              body: `${issueBody}\n\nCreated from issue #${issueNumber}`,
-              head: "${{ env.BRANCH_NAME }}",
-              base: "main"
-            });
-            
-            // Apply the cluster-request label
-            await github.rest.issues.addLabels({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: pr.data.number,
-              labels: ['cluster-request']
-            });
-            
-            // Link the PR to the issue
-            await github.rest.issues.createComment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              body: `Pull Request #${pr.data.number} has been created for this cluster request.`
-            });
-            
-            // Close the issue as it's now tracked by a PR
-            await github.rest.issues.update({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              issue_number: issueNumber,
-              state: 'closed',
-              state_reason: 'completed'
-            });
-            
-            return pr.data.number; 
+        run: |
+          # Create the PR using the GitHub CLI
+          gh pr create \
+            --title "[Cluster Request] ${{ env.ISSUE_TITLE }}" \
+            --body-file issue_body.txt \
+            --head "${{ env.BRANCH_NAME }}" \
+            --base "main" \
+            --label "cluster-request"
+          
+          # Get the PR number from the last created PR
+          PR_NUMBER=$(gh pr list --head "${{ env.BRANCH_NAME }}" --json number -q '.[0].number')
+          echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
+          
+          # Link the PR to the issue
+          gh issue comment ${{ env.ISSUE_NUMBER }} --body "Pull Request #$PR_NUMBER has been created for this cluster request."
+          
+          # Close the issue
+          gh issue close ${{ env.ISSUE_NUMBER }} -c "Tracked by PR #$PR_NUMBER"
+        env:
+          GH_TOKEN: ${{ secrets.CLUSTER_REQUEST_PAT }} 
